@@ -1,0 +1,290 @@
+---
+title: "Summary of Storm Data from 1950 to 2011 and its Costs"
+author: "Jeffrey Norton, Ph.D."
+date: "March 10, 2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+```
+
+# Original Data
+
+The original data is [here](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) and the National Weather Service Storm Data Documentation is [here](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf).
+The events in the database span from 1950 and end in November 2011. The data from earlier years is sparse with fewer
+recorded events.  The data from more recent years is considered more complete.
+
+# Data Processing
+
+[Download](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) and unzip the CSV file.  Read the table into a data table representing the raw storm data.
+
+```{r echo=TRUE, eval=TRUE, cache=TRUE}
+StormData <- read.csv(file="repdata%2Fdata%2FStormData.csv", header=TRUE)
+```
+
+## Data Analysis
+
+The steps taken in the data analysis are the following:
+
+1. Determine and summarize the worst storm type for fatalities and injuries for all the United States from 1950 to 2011.
+
+2. Determine and summarize the worst storm type for property and crop damage in dollars for all the Unites States from 1950 to 2011.
+
+3. For each state (which includes US States, marine regions, etc.), determine a maximum of the three most costly storms with respect to fatalities, injuries, property, and crop damage.
+
+# Results
+
+## Fatalities and Injuries
+
+Determine the worst Storm Type for fatalities and injuries across the United States.
+
+```{r echo=TRUE, eval=TRUE, cache=TRUE}
+# For ease, create named vectors of the fatalities/injuries.
+evtype <- unique(StormData$EVTYPE)
+event.fatalities <- integer(length=length(evtype))
+event.injuries   <- integer(length=length(evtype))
+i <- 1
+for( event in evtype ) {
+  s <- sum(StormData[StormData$EVTYPE==event,]$FATALITIES)
+  event.fatalities[i] <- s
+  s <- sum(StormData[StormData$EVTYPE==event,]$INJURIES)
+  event.injuries[i] <- s
+  i <- i+1
+}
+names(event.fatalities) <- unique(StormData$EVTYPE)
+names(event.injuries) <- unique(StormData$EVTYPE)
+
+# Get max fatalities and injuries...
+worst.f <- which(event.fatalities==max(event.fatalities))
+worst.i <- which(event.injuries==max(event.injuries))
+worst.fatal.name <- names(event.fatalities[worst.f])
+worst.injury.name <- names(event.injuries[worst.i])
+print(sprintf("Event and Count: Worst Fatalities: %s=%d.  Worst Injuries: %s=%d",
+      worst.fatal.name, as.integer(event.fatalities[worst.f]),
+      worst.injury.name, as.integer(event.injuries[worst.i])))
+
+```
+
+The worst storm type is `r worst.fatal.name` with `r prettyNum(as.integer(event.fatalities[worst.f]),scientific=FALSE,big.mark=",")` fatalities
+and `r worst.injury.name` with `r prettyNum(as.integer(event.injuries[worst.i]),scientific=FALSE,big.mark=",")` injuries (total from 1950 to 2011).
+
+The following plot shows injuries and fatalities across the United States for `r worst.fatal.name` events.
+
+```{r echo=TRUE, eval=TRUE, cache=TRUE}
+# Add a year column to StormData (since we will use it three times...)
+StormData[["YEARY"]] <-
+  as.numeric(format(as.Date(vapply(strsplit(as.character(StormData$BGN_DATE), split=" "),
+                                   '[', 1, FUN.VALUE=character(1)), format="%m/%d/%Y"), "%Y"))
+# Create a data.frame with the year and the sum of each years fatalities...
+unique.years <- unique(StormData[["YEARY"]])
+fatality.sum <- injury.sum <- numeric(length(unique.years))
+i <- 1
+for( y in unique.years ) {
+  fatality.sum[i] = sum(StormData[StormData$YEARY==y,]$FATALITIES)
+  injury.sum[i] = sum(StormData[StormData$YEARY==y,]$INJURIES)
+  i <- i+1
+}
+plot.df <- data.frame(unique.years, fatality.sum, injury.sum)
+colnames(plot.df) <- c("year", "fatalities", "injuries")
+# Now create a ggplot using the data frame
+library(ggplot2)
+library(tidyr)
+print(
+  plot.df %>%
+    gather(Legend,Count, fatalities, injuries) %>%
+    ggplot(aes(x=year,y=Count,color=Legend)) + geom_point() +
+    labs(x="Year") + ggtitle("Fatalities and Injuries due to Storm Events in the United States"))
+```
+
+## Storm damage (property and crop)
+
+Determine the worst Storm Type for property and crop damage in dollars across the United States.
+
+### Interpreting Property and Crop Damage Amounts
+
+```{r echo=TRUE, eval=TRUE, cache=TRUE}
+# Calculate property and crop damage.  We need to set up an exponent table
+# because the exponents are crazy for these entries:
+# K M   B m + 0 5 6 ? 4 2 3 h 7 H - 1 8 ? 0 2 B k K m M
+# Some make absolutely no sense, so we have to guess them.
+# The documentation is of no use for the strange entries.
+available.exponents <- unique(c(as.character(unique(StormData$CROPDMGEXP)),
+                                as.character(unique(StormData$PROPDMGEXP))))
+writeLines(sprintf("All used exponents for cost values:\n%s",
+                   paste(available.exponents, collapse=", ")))
+# The following list includes all the above plus an extra small "b" for billions.
+exponent.lookup <- list(K=3, M=6, "1"=1, "2"=2, "3"=3, "4"=4, "5"=5,
+                        "6"=6, "7"=7, "8"=8, "9"=9, B=9, m=6,
+                        "0"=1, "+"=1, "-"=1, k=3, b=9, "?"=1, h=3, H=3)
+# Get something printable with kable
+exponent.lookup.df <- data.frame(unlist(exponent.lookup))
+colnames(exponent.lookup.df) <- c("Exponent Value")
+```
+
+Amounts are given as a number and an exponent.  Unfortunately, exponents are not given in a clear and consistent
+manner in many cases.  We have defined a lookup table for exponents of property and crop damage.  While many of the
+values are defined in the [documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf) or are obvious, many are not.  For example, what does "H" or "-" represent as exponents.  In cases where a value cannot be determined, exponent values
+are set to "1".  All values for exponents as used in further calculations
+and given here:
+`r knitr::kable(exponent.lookup.df)`
+
+Given these assumptions, calculate property and cost damage.
+
+```{r echo=TRUE, eval=TRUE, cache=TRUE}
+l <- as.character(StormData$PROPDMGEXP)
+l[which(l=="")] <- "1"
+for( e in unique(l) ) {
+  l[which(l==e)] <- exponent.lookup[[e]]
+}
+prop.damage <- StormData$PROPDMG * 10^(as.integer(l))
+l <- as.character(StormData$CROPDMGEXP)
+l[which(l=="")] <- "1"
+for( e in unique(l) ) {
+  l[which(l==e)] <- exponent.lookup[[e]]
+}
+crop.damage <- StormData$CROPDMG * 10^(as.integer(l))
+
+# Store the property and crop damage values into the StormData data.frame as
+# we will be using it from here on out.
+StormData[["PROPDMGC"]] <- prop.damage
+StormData[["CROPDMGC"]] <- crop.damage
+
+event.prop.damage <- integer(length=length(evtype))
+event.crop.damage <- integer(length=length(evtype))
+i <- 1
+for( event in evtype ) {
+  s <- sum(StormData[StormData$EVTYPE==event,]$PROPDMGC)
+  event.prop.damage[i] <- s
+  s <- sum(StormData[StormData$EVTYPE==event,]$CROPDMGC)
+  event.crop.damage[i] <- s
+  i <- i+1
+}
+names(event.prop.damage) <- unique(StormData$EVTYPE)
+names(event.crop.damage) <- unique(StormData$EVTYPE)
+
+# Get max property damage...
+worst.p <- which(event.prop.damage==max(event.prop.damage))
+worst.c <- which(event.crop.damage==max(event.crop.damage))
+worst.p.name <- names(event.prop.damage[worst.p])
+worst.c.name <- names(event.crop.damage[worst.c])
+writeLines(sprintf(
+  "Event and Count:\nWorst Property Damage: %s=$%15.2f.\nWorst Crop Damage: %s=$%15.2f",
+      worst.p.name, as.numeric(event.prop.damage[worst.p]),
+      worst.c.name, as.numeric(event.crop.damage[worst.c])))
+
+```
+For property damage, the worst storm type is `r worst.p.name` with
+`r prettyNum(as.numeric(event.prop.damage[worst.p]),scientific=FALSE,big.mark=",")` dollars damage.
+For crop damage, the worst storm type is `r worst.c.name` with
+`r prettyNum(as.numeric(event.crop.damage[worst.c]),scientific=FALSE,big.mark=",")` dollars damage.
+Both values are the sum of all events from 1950 to 2011.
+
+The following plot shows property damage across the United States for `r worst.p.name` events.
+
+```{r echo=TRUE, eval=TRUE, cache=TRUE}
+Damage <- numeric(length(unique.years))
+i <- 1
+
+for( y in unique.years ) {
+  Damage[i] = sum(StormData[StormData$YEARY==y,]$PROPDMGC)
+  i <- i+1
+}
+plot.df <- data.frame(unique.years, Damage)
+colnames(plot.df) <- c("year", "Damage")
+# Now create a ggplot with the data frame
+print(
+  plot.df %>%
+    gather(Legend,Count, Damage) %>%
+    ggplot(aes(x=year,y=Count,color=Legend)) + geom_point() +
+    labs(x="Year", y="Property Damage in US Dollars") +
+    ggtitle("Property Damage Due to Storm Events in the United States"))
+```
+
+The following plot shows cost damage across the United States for `r worst.c.name` events.
+
+```{r echo=TRUE, eval=TRUE, cache=TRUE}
+Damage <- numeric(length(unique.years))
+i <- 1
+for( y in unique.years ) {
+  Damage[i] = sum(StormData[StormData$YEARY==y,]$CROPDMGC)
+  i <- i+1
+}
+#print(Damage)
+plot.df <- data.frame(unique.years, Damage)
+colnames(plot.df) <- c("year", "Damage")
+# Now create a ggplot with the data frame
+print(
+  plot.df %>%
+    gather(Legend,Count, Damage) %>%
+    ggplot(aes(x=year,y=Count,color=Legend)) + geom_point() +
+    labs(x="Year", y="Crop Damage in US Dollars") +
+    ggtitle("Crop Damage Due to Storm Events in the United States"))
+```
+
+## Body and Property Damage by State
+
+States and their executive and legistlative bodies are responsible for risk assessment with respect to
+weather, storm, and other such events.
+Breaking down both life and
+property events to each state is helpful for state governments to understand what types of
+events are likely to occur in their states and what the potential risks and costs are
+for risk assessment planning.  Breaking these values also can help the United States Congress
+to plan the budget to set aside funds for helping states in times of emergency.
+
+```{r eval=TRUE, echo=TRUE, cache=TRUE, results="asis"}
+# Extract data per state into its own frame
+for(st in sort(unique(StormData$STATE))) {
+  state.report <- StormData[StormData$STATE==st,]
+# Then, get gather body and property damage for each "state"
+  fatalities <- injuries <- properties <- crops <-
+    vector(mode="numeric", length=length(unique(state.report$EVTYPE)))
+  i <- 1
+  wkevt <- unique(state.report$EVTYPE)
+  for(ev in wkevt) {
+    fatalities[i] <- sum(state.report[state.report$EVTYPE==ev,]$FATALITIES)
+    injuries[i] <- sum(state.report[state.report$EVTYPE==ev,]$INJURIES)
+    properties[i] <- sum(state.report[state.report$EVTYPE==ev,]$PROPDMGC)
+    crops[i] <- sum(state.report[state.report$EVTYPE==ev,]$CROPDMGC)
+    i <- i+1
+  }
+  names(fatalities) <- names(injuries) <- names(properties) <- names(crops) <- wkevt
+  # Sort each
+  fatalities <- sort(fatalities, decreasing=TRUE)
+  injuries <- sort(injuries, decreasing=TRUE)
+  properties <- sort(properties, decreasing=TRUE)
+  crops <- sort(crops, decreasing=TRUE)
+  # Create a nice report for each "state"
+  cat("##", st, "\n")
+  cat("###", "Events of Concern", "\n")
+  cat(sprintf("%s  %s", 
+      "Top events for fatalities, injuries, property damage and crop damage (up to three).",
+      "The data includes all recorded weather events from 1950 to November 2011."))
+  
+  mnrow <- ifelse(length(fatalities) < 3, length(fatalities), 3)
+  df <- data.frame(c(prettyNum(unlist(fatalities[1:mnrow]),scientific=FALSE,big.mark=",")))
+  colnames(df) <- c("Number of Fatalities")
+  print(knitr::kable(df, caption="Fatalities (1950-2011)"))
+  cat("\n")
+  
+  mnrow <- ifelse(length(injuries) < 3, length(injuries), 3)
+  df <- data.frame(c(prettyNum(unlist(injuries[1:mnrow]),scientific=FALSE,big.mark=",")))
+  colnames(df) <- c("Number of Injuries")
+  print(knitr::kable(df, caption="Injuries (1950-2011)"))
+  cat("\n")
+  
+  mnrow <- ifelse(length(properties) < 3, length(properties), 3)
+  df <- data.frame(c(prettyNum(unlist(properties[1:mnrow]),scientific=FALSE,big.mark=",")))
+  colnames(df) <- c("Property Damage ($)")
+  print(knitr::kable(df, caption="Property Damage Costs (1950-2011)"))
+  cat("\n")
+  
+  mnrow <- ifelse(length(crops) < 3, length(crops), 3)
+  df <- data.frame(c(prettyNum(unlist(crops[1:mnrow]),scientific=FALSE,big.mark=",")))
+  colnames(df) <- c("Crop Damage ($)")
+  print(knitr::kable(df, caption="Crop Damage Costs (1950-2011)"))
+  cat("\n")
+
+}
+```
